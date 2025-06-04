@@ -4,7 +4,6 @@ import re
 import sys
 import psutil
 import glob
-import openai
 import json
 import datetime
 import traceback
@@ -14,7 +13,6 @@ from faster_whisper import WhisperModel
 from numba import cuda
 from pydub import AudioSegment
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
 
 # Constants for pricing
 WHISPER_COST_PER_MINUTE = 0.006
@@ -39,15 +37,27 @@ def add_to_system_path(new_path):
     if sys.platform == "win32" and ' ' in new_path and not new_path.startswith('"') and not new_path.endswith('"'):
         os.environ["PATH"] = f'"{new_path}"' + os.pathsep + os.environ["PATH"].replace(new_path, "")
 
-def get_cuda_toolkit_path():
-    home_dir = os.path.expanduser('~')
-    if sys.platform in ["win32", "linux", "linux2", "darwin"]:
-        anaconda_base_path = os.path.join(home_dir, "anaconda3", "pkgs")
-    cuda_glob_pattern = os.path.join(anaconda_base_path, "cudatoolkit-*", "Library", "bin")
+def get_cuda_toolkit_path() -> str | None:
+    """Locate the CUDA Toolkit installed by Anaconda.
+
+    The original implementation always looked for the Windows style
+    ``Library/bin`` directory regardless of the current platform. On
+    Linux and macOS the binaries reside in ``bin``. This function now
+    selects the correct sub-directory based on ``sys.platform`` and
+    safely handles platforms where the expected path does not exist.
+    """
+
+    home_dir = os.path.expanduser("~")
+
+    if sys.platform not in {"win32", "linux", "linux2", "darwin"}:
+        return None
+
+    anaconda_base_path = os.path.join(home_dir, "anaconda3", "pkgs")
+    subdir = os.path.join("Library", "bin") if sys.platform == "win32" else "bin"
+    cuda_glob_pattern = os.path.join(anaconda_base_path, "cudatoolkit-*", subdir)
+
     cuda_paths = glob.glob(cuda_glob_pattern)
-    if cuda_paths:
-        return cuda_paths[0]
-    return None
+    return cuda_paths[0] if cuda_paths else None
 
 cuda_toolkit_path = get_cuda_toolkit_path()
 print("CUDA Toolkit Path:", cuda_toolkit_path)
@@ -124,7 +134,7 @@ async def download_audio(video):
 def estimate_whisper_transcription_cost(audio_duration_seconds):
     audio_duration_minutes = audio_duration_seconds / 60
     estimated_cost = audio_duration_minutes * WHISPER_COST_PER_MINUTE
-    print(f"\n=== Estimated Whisper Transcription Cost ===")
+    print("\n=== Estimated Whisper Transcription Cost ===")
     print(f"Audio Duration: {audio_duration_minutes:.2f} minutes")
     print(f"Estimated Cost: ${estimated_cost:.4f}\n")
     return estimated_cost
@@ -189,7 +199,6 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_path, audio
             device = "cpu"
             compute_type = "auto"
         model = WhisperModel("large-v3", device=device, compute_type=compute_type)
-        request_time = datetime.datetime.now(datetime.UTC)
         print(f"Computing transcript for {audio_file_name} which has a {audio_file_size_mb:.2f}MB file size...")
         audio_duration_seconds = await get_audio_duration(audio_file_path)
         with tqdm(total=audio_duration_seconds, desc=f"Transcribing {audio_file_name}", unit="s") as pbar:
